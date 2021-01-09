@@ -1,0 +1,528 @@
+#include "LD3320.h"
+#include "motor.h"
+#include "redvoid.h"
+#include "stm32f10x_spi.h"
+#include "interface.h"
+
+uint8 nAsrStatus = 0;	
+uint8 nLD_Mode = LD_MODE_IDLE;
+uint8 ucRegVal;
+int f=1;
+int key=1;
+int key1=1;
+extern uint8 nAsrRes=0;
+///ÓÃ»§ÐÞ¸Ä
+void LD3320_main(void)
+{
+	LD3320_init();	  	
+	nAsrStatus = LD_ASR_NONE;
+}
+
+static uint8 LD_AsrAddFixed(void)
+{
+	uint8 k, flag;
+	uint8 nAsrAddLength;
+	#define DATE_A 11  
+	#define DATE_B 20		
+	uint8  sRecog[DATE_A][DATE_B] = {
+	 			"zhi xing",\
+		    "qian jin",\
+				"hou tui",\
+				"zuo zhuan",\
+				"you zhuan",\
+				"bi zhang",\
+		    "ting zhi" ,\
+		    "ting",\
+		    "bian dao",\
+		    "zuopian",\
+		   "youpian" \
+																	};	
+	uint8  pCode[DATE_A] = {
+	 															CODE_ZX,\
+		                           	CODE_QJ,\
+																CODE_HT,\
+																CODE_ZZ,\
+																CODE_YZ,\
+																CODE_BZ,\
+		                            CODE_TZ ,\
+		                            CODE_TI ,\
+		                            CODE_BD ,\
+		                            CODE_ZP ,\
+		                            CODE_YP  \
+															};	
+	flag = 1;
+	for (k=0; k<DATE_A; k++)
+	{			
+		if(LD_Check_ASRBusyFlag_b2() == 0)
+		{
+			flag = 0;
+			break;
+		}
+
+		LD_WriteReg(0xc1, pCode[k] );
+		LD_WriteReg(0xc3, 0);
+		LD_WriteReg(0x08, 0x04);
+		LD3320_delay(1);
+		LD_WriteReg(0x08, 0x00);
+		LD3320_delay(1);
+
+		for (nAsrAddLength=0; nAsrAddLength<DATE_B; nAsrAddLength++)
+		{
+			if (sRecog[k][nAsrAddLength] == 0)
+				break;
+			LD_WriteReg(0x5, sRecog[k][nAsrAddLength]);
+		}
+		LD_WriteReg(0xb9, nAsrAddLength);
+		LD_WriteReg(0xb2, 0xff);
+		LD_WriteReg(0x37, 0x04);
+	}	 
+	return flag;
+}
+
+void Board_text(uint8 Code_Val)
+{																					 
+	switch(Code_Val)  
+	{
+		case CODE_ZX:  
+			CarGo();
+		Key_LED();
+			break;
+			case CODE_QJ: 
+			CarGo();
+			Key_LED();
+			break;
+		case CODE_HT:	 
+			CarBack();
+			Flicker_LED();
+			break;
+		case CODE_ZZ:	
+//			if(key1==1){key=1;}
+			CarLeft();
+		   Jt_LED();
+		  	Delayms(1000);
+				 CarStop();
+		//	Code_Val=7;
+    break;
+		case CODE_YZ:	
+			CarRight();
+			On_LED();
+			break;
+		case CODE_BZ:		
+			VoidRun();
+		  Off_LED();
+			break;
+		case CODE_TZ:  
+			CarStop();
+		break;
+				case CODE_TI:  
+			CarStop();
+		break;
+				case CODE_BD:  
+			CarChange();
+		break;
+			case CODE_ZP:  
+			CarStop();
+		break;
+			case CODE_YP:  
+			CarStop();
+		break;
+		default:
+			break;
+	}	
+}
+/*
+*/
+//static void Delay_ms(uint16 i)
+//{
+//	unsigned char a,b;
+//	for(;i>0;i--)
+//	        for(b=4;b>0;b--)
+//	            for(a=113;a>0;a--);	
+//}
+
+void Flicker_LED(void)
+{
+	LED1_ON();
+	LED2_OFF();
+	LED3_OFF();
+	Delayms(1000);
+	LED1_OFF();
+	LED2_OFF();
+	LED3_OFF();
+	Delayms(1000);
+}
+
+void Key_LED(void)
+{
+	LED2_ON();
+	LED1_OFF();
+	LED3_OFF();
+}
+
+void Off_LED(void)
+{
+	LED1_OFF();
+	LED2_OFF();
+	LED3_OFF();
+}
+void On_LED(void)
+{
+	LED1_ON();
+	LED2_ON();
+	LED3_ON();
+}
+void Jt_LED(void)
+{
+	LED3_ON();
+	LED1_OFF();
+	LED2_OFF();
+	Delayms(1000);
+	LED3_OFF();
+	LED1_OFF();
+	LED2_OFF();
+	Delayms(1000);
+}
+static void LD3320_init(void)
+{
+	LD3320_GPIO_Cfg();	
+	LD3320_EXTI_Cfg();
+	LD3320_SPI_cfg();
+	LED_GPIO_cfg();
+	LD_reset();
+}
+
+static void LD3320_GPIO_Cfg(void)
+{	
+		GPIO_InitTypeDef GPIO_InitStructure;
+		RCC_APB2PeriphClockCmd(LD3320RST_GPIO_CLK | LD3320CS_GPIO_CLK,ENABLE);
+		//LD_CS	/RSET
+		GPIO_InitStructure.GPIO_Pin =LD3320CS_PIN;
+		GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;
+		GPIO_InitStructure.GPIO_Mode = GPIO_Mode_Out_PP;
+		GPIO_Init(LD3320CS_GPIO_PORT,&GPIO_InitStructure);
+		GPIO_InitStructure.GPIO_Pin =LD3320RST_PIN;
+		GPIO_Init(LD3320RST_GPIO_PORT,&GPIO_InitStructure);
+}
+
+static void LD3320_EXTI_Cfg(void)
+{
+  EXTI_InitTypeDef EXTI_InitStructure;
+	NVIC_InitTypeDef NVIC_InitStructure;
+  GPIO_InitTypeDef GPIO_InitStructure;
+	RCC_APB2PeriphClockCmd(RCC_APB2Periph_AFIO,ENABLE);	
+
+	RCC_APB2PeriphClockCmd(LD3320IRQ_GPIO_CLK, ENABLE);
+  GPIO_InitStructure.GPIO_Pin =LD3320IRQ_PIN;
+  GPIO_InitStructure.GPIO_Mode = GPIO_Mode_IN_FLOATING;
+  GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;
+  GPIO_Init(LD3320IRQ_GPIO_PORT, &GPIO_InitStructure);
+  GPIO_EXTILineConfig(LD3320IRQEXIT_PORTSOURCE, LD3320IRQPINSOURCE);
+  EXTI_InitStructure.EXTI_Line = LD3320IRQEXITLINE;
+  EXTI_InitStructure.EXTI_Mode = EXTI_Mode_Interrupt;
+  EXTI_InitStructure.EXTI_Trigger =EXTI_Trigger_Falling;
+  EXTI_InitStructure.EXTI_LineCmd = ENABLE;
+  EXTI_Init(&EXTI_InitStructure);
+  NVIC_InitStructure.NVIC_IRQChannel = LD3320IRQN;
+  NVIC_InitStructure.NVIC_IRQChannelPreemptionPriority = 1;
+  NVIC_InitStructure.NVIC_IRQChannelSubPriority = 1;
+  NVIC_InitStructure.NVIC_IRQChannelCmd = ENABLE;
+  NVIC_Init(&NVIC_InitStructure);
+}
+
+static void LD3320_SPI_cfg(void)
+{
+	SPI_InitTypeDef  SPI_InitStructure;
+	GPIO_InitTypeDef GPIO_InitStructure;
+	RCC_APB2PeriphClockCmd(LD3320SPI_CLK,ENABLE);		
+  RCC_APB2PeriphClockCmd(LD3320WR_GPIO_CLK | LD3320SPIMISO_GPIO_CLK | LD3320SPIMOSI_GPIO_CLK | LD3320SPISCK_GPIO_CLK,ENABLE);
+	
+	GPIO_InitStructure.GPIO_Pin = LD3320SPIMISO_PIN;
+	GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;
+	GPIO_InitStructure.GPIO_Mode = GPIO_Mode_AF_PP;
+	GPIO_Init(LD3320SPIMISO_GPIO_PORT,&GPIO_InitStructure);
+	
+	GPIO_InitStructure.GPIO_Pin = LD3320SPIMOSI_PIN;
+	GPIO_Init(LD3320SPIMOSI_GPIO_PORT,&GPIO_InitStructure);
+
+	GPIO_InitStructure.GPIO_Pin = LD3320SPISCK_PIN;
+	GPIO_Init(LD3320SPISCK_GPIO_PORT,&GPIO_InitStructure);
+	
+	GPIO_InitStructure.GPIO_Pin = LD3320WR_PIN;				
+	GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;
+	GPIO_InitStructure.GPIO_Mode = GPIO_Mode_Out_PP;
+	GPIO_Init(LD3320WR_GPIO_PORT, &GPIO_InitStructure);	
+	LD_CS_H();	
+	SPI_Cmd(LD3320SPI, DISABLE);
+
+	SPI_InitStructure.SPI_Direction = SPI_Direction_2Lines_FullDuplex;   	
+	SPI_InitStructure.SPI_Mode = SPI_Mode_Master;						   					
+	SPI_InitStructure.SPI_DataSize = SPI_DataSize_8b;					   					
+	SPI_InitStructure.SPI_CPOL = SPI_CPOL_High;						   						
+	SPI_InitStructure.SPI_CPHA = SPI_CPHA_1Edge;						   					
+	SPI_InitStructure.SPI_NSS = SPI_NSS_Soft;							   							
+	SPI_InitStructure.SPI_BaudRatePrescaler = SPI_BaudRatePrescaler_64;  SYSCLK/128
+	SPI_InitStructure.SPI_FirstBit = SPI_FirstBit_MSB;				   				
+	SPI_InitStructure.SPI_CRCPolynomial = 7;							   						
+	SPI_Init(LD3320SPI, &SPI_InitStructure);
+	SPI_Cmd(LD3320SPI, ENABLE);
+}
+
+static void LED_GPIO_cfg(void)
+{	
+		GPIO_InitTypeDef GPIO_InitStructure;
+	
+		RCC_APB2PeriphClockCmd(LED1_GPIO_CLK | LED2_GPIO_CLK | LED3_GPIO_CLK,ENABLE);
+	
+		GPIO_InitStructure.GPIO_Pin = LED1_PIN;
+		GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;
+		GPIO_InitStructure.GPIO_Mode = GPIO_Mode_Out_PP;
+		GPIO_Init(LED1_GPIO_PORT, &GPIO_InitStructure);
+		GPIO_InitStructure.GPIO_Pin = LED2_PIN;
+		GPIO_Init(LED2_GPIO_PORT, &GPIO_InitStructure);
+		GPIO_InitStructure.GPIO_Pin = LED3_PIN;
+		GPIO_Init(LED3_GPIO_PORT, &GPIO_InitStructure);
+	
+		LED1_OFF();
+		LED2_OFF();
+		LED3_OFF();
+}
+void EXTI15_10_IRQHandler(void)
+{
+	if(EXTI_GetITStatus(LD3320IRQEXITLINE)!= RESET ) 
+	{
+		ProcessInt(); 
+		EXTI_ClearFlag(LD3320IRQEXITLINE);
+	} 
+}
+static void LD3320_delay(unsigned long uldata)
+{
+	unsigned int i  =  0;
+	unsigned int j  =  0;
+	unsigned int k  =  0;
+	for (i=0;i<5;i++)
+	{
+		for (j=0;j<uldata;j++)
+		{
+			k = 200;
+			while(k--);
+		}
+	}
+}
+uint8 RunASR(void)
+{
+	uint8 i=0;
+	uint8 asrflag=0;
+	for (i=0; i<5; i++)		
+	{
+		LD_AsrStart();		
+		LD3320_delay(100);
+		if (LD_AsrAddFixed()==0)	
+		{
+			LD_reset();			
+			LD3320_delay(50);	
+			continue;
+		}
+		LD3320_delay(10);
+		if (LD_AsrRun() == 0)
+		{
+			LD_reset();		
+			LD3320_delay(50);
+			continue;
+		}
+		asrflag=1;
+		break;						
+	}	
+	return asrflag;
+}
+
+static void LD_reset(void)
+{
+	LD_RST_H();
+	LD3320_delay(100);
+	LD_RST_L();
+	LD3320_delay(100);
+	LD_RST_H();
+	LD3320_delay(100);
+	LD_CS_L();
+	LD3320_delay(100);
+	LD_CS_H();		
+	LD3320_delay(100);
+}
+
+static void LD_AsrStart(void)
+{
+	LD_Init_ASR();
+}
+
+uint8 LD_Check_ASRBusyFlag_b2(void)
+{
+	uint8 j;
+	uint8 flag = 0;
+	for (j=0; j<10; j++)
+	{
+		if (LD_ReadReg(0xb2) == 0x21)
+		{
+			flag = 1;
+			break;
+		}
+		LD3320_delay(10);		
+	}
+	return flag;
+}
+///ÖÐ¼ä²ãend
+
+
+///¼Ä´æÆ÷²Ù×÷
+static uint8 spi_send_byte(uint8 byte)
+{
+	while (SPI_I2S_GetFlagStatus(LD3320SPI, SPI_I2S_FLAG_TXE) == RESET);
+	SPI_I2S_SendData(LD3320SPI,byte);
+	while (SPI_I2S_GetFlagStatus(LD3320SPI,SPI_I2S_FLAG_RXNE) == RESET);
+	return SPI_I2S_ReceiveData(LD3320SPI);
+}
+
+static void LD_WriteReg(uint8 data1,uint8 data2)
+{
+	LD_CS_L();
+	LD_SPIS_L();
+	spi_send_byte(0x04);
+	spi_send_byte(data1);
+	spi_send_byte(data2);
+	LD_CS_H();
+}
+
+static uint8 LD_ReadReg(uint8 reg_add)
+{
+	uint8 i;
+	LD_CS_L();
+	LD_SPIS_L();
+	spi_send_byte(0x05);
+	spi_send_byte(reg_add);
+	i=spi_send_byte(0x00);
+	LD_CS_H();
+	return(i);
+}
+
+uint8 LD_GetResult(void)
+{
+	return LD_ReadReg(0xc5);
+}
+
+static uint8 LD_AsrRun(void)
+{
+	LD_WriteReg(0x35, MIC_VOL);
+	LD_WriteReg(0x1C, 0x09);
+	LD_WriteReg(0xBD, 0x20);
+	LD_WriteReg(0x08, 0x01);
+	LD3320_delay( 5 );
+	LD_WriteReg(0x08, 0x00);
+	LD3320_delay( 5);
+
+	if(LD_Check_ASRBusyFlag_b2() == 0)
+	{
+		return 0;
+	}
+	LD_WriteReg(0xB2, 0xff);	
+	LD_WriteReg(0x37, 0x06);
+	LD_WriteReg(0x37, 0x06);
+	LD3320_delay(5);
+	LD_WriteReg(0x1C, 0x0b);
+	LD_WriteReg(0x29, 0x10);
+	LD_WriteReg(0xBD, 0x00);   
+	return 1;
+}
+
+static void ProcessInt(void)
+{
+	uint8 nAsrResCount=0;
+	ucRegVal = LD_ReadReg(0x2B);
+	LD_WriteReg(0x29,0) ;
+	LD_WriteReg(0x02,0) ;
+
+	if((ucRegVal & 0x10) && LD_ReadReg(0xb2)==0x21 && LD_ReadReg(0xbf)==0x35)		
+	{	 
+			nAsrResCount = LD_ReadReg(0xba);
+
+			if(nAsrResCount>0 && nAsrResCount<=4) 
+			{
+				nAsrStatus=LD_ASR_FOUNDOK; 				
+			}
+			else
+			{
+				nAsrStatus=LD_ASR_FOUNDZERO;
+			}	
+	}
+	else
+	{
+		nAsrStatus=LD_ASR_FOUNDZERO;//Ö´ÐÐÃ»ÓÐÊ¶±ð
+	}
+
+	LD_WriteReg(0x2b,0);
+	LD_WriteReg(0x1C,0);//Ð´0:ADC²»¿ÉÓÃ
+	LD_WriteReg(0x29,0);
+	LD_WriteReg(0x02,0);
+	LD_WriteReg(0x2B,0);
+	LD_WriteReg(0xBA,0);	
+	LD_WriteReg(0xBC,0);	
+	LD_WriteReg(0x08,1);//Çå³ýFIFO_DATA
+	LD_WriteReg(0x08,0);//Çå³ýFIFO_DATAºó ÔÙ´ÎÐ´0
+}
+
+static void LD_Init_Common(void)
+{
+	LD_ReadReg(0x06);  
+	LD_WriteReg(0x17, 0x35); 
+	LD3320_delay(5);
+	LD_ReadReg(0x06);  
+
+	LD_WriteReg(0x89, 0x03);  
+	LD3320_delay(5);
+	LD_WriteReg(0xCF, 0x43);   
+	LD3320_delay(5);
+	LD_WriteReg(0xCB, 0x02);
+	
+	/*PLL setting*/
+	LD_WriteReg(0x11, LD_PLL_11);       
+	if (nLD_Mode == LD_MODE_MP3)
+	{
+		LD_WriteReg(0x1E, 0x00); 
+		LD_WriteReg(0x19, LD_PLL_MP3_19);   
+		LD_WriteReg(0x1B, LD_PLL_MP3_1B);   
+		LD_WriteReg(0x1D, LD_PLL_MP3_1D);
+	}
+	else
+	{
+		LD_WriteReg(0x1E,0x00);
+		LD_WriteReg(0x19, LD_PLL_ASR_19); 
+		LD_WriteReg(0x1B, LD_PLL_ASR_1B);		
+	  LD_WriteReg(0x1D, LD_PLL_ASR_1D);
+	}
+	LD3320_delay(5);
+	
+	LD_WriteReg(0xCD, 0x04);
+	LD_WriteReg(0x17, 0x4c); 
+	LD3320_delay(1);
+	LD_WriteReg(0xB9, 0x00);
+	LD_WriteReg(0xCF, 0x4F); 
+	LD_WriteReg(0x6F, 0xFF); 
+}
+
+static void LD_Init_ASR(void)
+{
+	nLD_Mode=LD_MODE_ASR_RUN;
+	LD_Init_Common();
+
+	LD_WriteReg(0xBD, 0x00);
+	LD_WriteReg(0x17, 0x48);	
+	LD3320_delay(5);
+	LD_WriteReg(0x3C, 0x80);    
+	LD_WriteReg(0x3E, 0x07);
+	LD_WriteReg(0x38, 0xff);    
+	LD_WriteReg(0x3A, 0x07);
+	LD_WriteReg(0x40, 0);          
+	LD_WriteReg(0x42, 8);
+	LD_WriteReg(0x44, 0);    
+	LD_WriteReg(0x46, 8); 
+	LD3320_delay( 1 );
+}
+/*********************************************END OF FILE**********************/
